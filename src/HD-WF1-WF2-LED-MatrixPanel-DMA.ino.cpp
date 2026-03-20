@@ -279,9 +279,9 @@ void setup() {
       PANEL_CHAIN,   // Chain length
       _pins_x1       // pin mapping for port X1
     );
-    mxconfig.i2sspeed = HUB75_I2S_CFG::HZ_20M;  
+    mxconfig.i2sspeed = HUB75_I2S_CFG::HZ_10M;  
     mxconfig.latch_blanking = 4;
-    //mxconfig.clkphase = false;
+    mxconfig.clkphase = false;
     mxconfig.driver = HUB75_I2S_CFG::FM6126A;
     //mxconfig.double_buff = false;  
     //mxconfig.min_refresh_rate = 30;
