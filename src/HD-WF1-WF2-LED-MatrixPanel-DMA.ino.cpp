@@ -54,8 +54,9 @@ const char* ntpLastUpdate     = "/ntp_last_update.txt";
 #define CLOCK_GMT_OFFSET 1
 
 /*-------------------------- HUB75E DMA Setup -----------------------------*/
-#define PANEL_RES_X 64      // Number of pixels wide of each INDIVIDUAL panel module. 
-#define PANEL_RES_Y 32     // Number of pixels tall of each INDIVIDUAL panel module.
+// Panel: 32x16, 1/4 scan, chip ICN2037BP + D14782NB
+#define PANEL_RES_X 32      // Number of pixels wide of each INDIVIDUAL panel module.
+#define PANEL_RES_Y 16     // Number of pixels tall of each INDIVIDUAL panel module.
 #define PANEL_CHAIN 1      // Total number of panels chained one to another
 
 
@@ -279,10 +280,10 @@ void setup() {
       PANEL_CHAIN,   // Chain length
       _pins_x1       // pin mapping for port X1
     );
-    mxconfig.i2sspeed = HUB75_I2S_CFG::HZ_10M;  
-    mxconfig.latch_blanking = 4;
+    mxconfig.i2sspeed = HUB75_I2S_CFG::HZ_10M;
+    mxconfig.latch_blanking = 1;   // ICN2037BP: 1 latch blank cycle (no special init required)
     mxconfig.clkphase = false;
-    mxconfig.driver = HUB75_I2S_CFG::FM6126A;
+    mxconfig.driver = HUB75_I2S_CFG::ICN2038S; // ICN2037BP is compatible with ICN2038S init sequence
     //mxconfig.double_buff = false;  
     //mxconfig.min_refresh_rate = 30;
 
@@ -617,25 +618,26 @@ void loop()
 }
 
 // Clock update with animated background (original behavior)
+// Layout for 32x16 panel: clock band at rows 4-11 (centre), animation fills rows 0-3 and 12-15
 void updateClockWithAnimation() {
     // Update time display every second
     if ((millis() - last_update) > 1000) {
         struct tm timeinfo;
         if (getTimeWithFallback(&timeinfo)) {
             memset(buffer, 0, 64);
-            snprintf(buffer, 64, "%02d:%02d:%02d", timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
+            // "HH:MM" = 5 chars x 6px = 30px — fits in 32px panel width
+            snprintf(buffer, 64, "%02d:%02d", timeinfo.tm_hour, timeinfo.tm_min);
 
             Serial.println("Performing screen time update...");
-            dma_display->fillRect(0, 9, PANEL_RES_X, 9, 0x00); // wipe the section of the screen just used for the time
-            dma_display->setCursor(8, 10);
+            dma_display->fillRect(0, 4, PANEL_RES_X, 8, 0x00); // wipe clock band (rows 4-11)
+            dma_display->setCursor(1, 5);
             dma_display->print(buffer);
         } else {
             Serial.println("Failed to get time from all sources.");
-            // Display error indicator
-            dma_display->fillRect(0, 9, PANEL_RES_X, 9, 0x00);
-            dma_display->setCursor(8, 10);
+            dma_display->fillRect(0, 4, PANEL_RES_X, 8, 0x00);
+            dma_display->setCursor(1, 5);
             dma_display->setTextColor(dma_display->color565(255, 0, 0)); // Red for error
-            dma_display->print("NO TIME");
+            dma_display->print("ERR");
         }
         last_update = millis();
     }
@@ -645,7 +647,7 @@ void updateClockWithAnimation() {
     float tt = (float)((millis() % 16000) / 16000.f);
 
     for (int x = 0; x < (PANEL_RES_X * PANEL_CHAIN); x++) {
-        // calculate the overal shade
+        // calculate the overall shade
         float f = (((sin(tt - (float)x / PANEL_RES_Y / 32.) * 2.f * PI) + 1) / 2) * 255;
         // calculate hue spectrum into rgb
         float r = max(min(cosf(2.f * PI * (t + ((float)x / PANEL_RES_Y + 0.f) / 3.f)) + 0.5f, 1.f), 0.f);
@@ -654,9 +656,9 @@ void updateClockWithAnimation() {
 
         // iterate pixels for every row
         for (int y = 0; y < PANEL_RES_Y; y++) {
-            // Keep this bit clear for the clock
-            if (y > 8 && y < 18) {
-                continue; // leave a black bar for the time, don't touch, this part of display is updated by the code in the clock update bit above
+            // Keep centre band clear for the clock (rows 4-11 on a 16px-tall panel)
+            if (y >= 4 && y <= 11) {
+                continue; // leave black bar for time text
             }
 
             if (y * 2 < PANEL_RES_Y) {
@@ -679,64 +681,59 @@ void updateClockWithAnimation() {
 }
 
 // Clock only mode (no animation background)
+// Layout for 32x16 panel: "HH:MM" on row 0, "DD/MM" on row 9 (font is 7px tall)
 void updateClockOnly() {
     if ((millis() - last_update) > 1000) {
         struct tm timeinfo;
         if (getTimeWithFallback(&timeinfo)) {
             dma_display->clearScreen();
-            
-            // Display time
+
+            // Time "HH:MM" — 30px wide, fits in 32px panel
             memset(buffer, 0, 64);
-            snprintf(buffer, 64, "%02d:%02d:%02d", timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
-            dma_display->setCursor(8, 4);
+            snprintf(buffer, 64, "%02d:%02d", timeinfo.tm_hour, timeinfo.tm_min);
+            dma_display->setCursor(1, 0);
             dma_display->setTextColor(dma_display->color565(255, 255, 255));
             dma_display->print(buffer);
-            
-            // Display date
+
+            // Date "DD/MM" — 30px wide, fits in 32px panel; placed at row 9 (0+7px font+2px gap)
             memset(buffer, 0, 64);
-            snprintf(buffer, 64, "%02d/%02d/%04d", timeinfo.tm_mday, timeinfo.tm_mon + 1, timeinfo.tm_year + 1900);
-            dma_display->setCursor(2, 16);
+            snprintf(buffer, 64, "%02d/%02d", timeinfo.tm_mday, timeinfo.tm_mon + 1);
+            dma_display->setCursor(1, 9);
             dma_display->setTextColor(dma_display->color565(200, 200, 200));
             dma_display->print(buffer);
-            
-            // Display day of week
-            const char* days[] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
-            dma_display->setCursor(2, 26);
-            dma_display->setTextColor(dma_display->color565(150, 150, 255));
-            dma_display->print(days[timeinfo.tm_wday]);
 
             Serial.println("Clock-only mode update");
         } else {
             Serial.println("Failed to get time from all sources.");
             dma_display->clearScreen();
-            dma_display->setCursor(8, 10);
+            dma_display->setCursor(1, 4);
             dma_display->setTextColor(dma_display->color565(255, 0, 0));
-            dma_display->print("NO TIME");
+            dma_display->print("ERR");
         }
         last_update = millis();
     }
 }
 
 // Update clock overlay for bouncing squares mode
+// On 32x16 panel: time "HH:MM" drawn at bottom row 9 with black background
 void updateClockOverlay() {
     if ((millis() - last_update) > 1000) {
         struct tm timeinfo;
         if (getTimeWithFallback(&timeinfo)) {
             memset(buffer, 0, 64);
             snprintf(buffer, 64, "%02d:%02d", timeinfo.tm_hour, timeinfo.tm_min);
-            
-            // Draw time with black background for readability
-            dma_display->fillRect(18, 12, 28, 8, 0x0000);
-            dma_display->setCursor(20, 14);
+
+            // Draw time with black background for readability (bottom 7 rows)
+            dma_display->fillRect(0, 9, PANEL_RES_X, 7, 0x0000);
+            dma_display->setCursor(1, 9);
             dma_display->setTextColor(dma_display->color565(255, 255, 255));
             dma_display->print(buffer);
 
             Serial.println("Bouncing squares with clock overlay update");
         } else {
             Serial.println("Failed to get time from all sources.");
-            // Show error in overlay
-            dma_display->fillRect(18, 12, 28, 8, 0x0000);
-            dma_display->setCursor(20, 14);
+            dma_display->fillRect(0, 9, PANEL_RES_X, 7, 0x0000);
+            dma_display->setCursor(1, 9);
             dma_display->setTextColor(dma_display->color565(255, 0, 0));
             dma_display->print("ERR");
         }
